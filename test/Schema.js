@@ -17,7 +17,7 @@ var should = require('should');
 
 
 describe('Schema tests', function (){
-  this.timeout(5000);
+  this.timeout(10000);
 
   it('Simple schema', function (done) {
     var schemaObj = {
@@ -166,6 +166,134 @@ describe('Schema tests', function (){
     done();
   });
 
+  it('Schema with ttl default options', function (done) {
+    var schema = new Schema(
+      {
+        id: Number,
+        name: String
+      },
+      {
+        expires: 30*24*60*60 // 30 days in seconds
+      }
+    );
+
+    should.exist(schema.expires);
+    should.exist(schema.expires.ttl);
+    schema.expires.ttl.should.be.equal(30*24*60*60);
+    should.exist(schema.expires.attribute);
+    schema.expires.attribute.should.be.equal('expires');
+    done();
+  });
+
+  it('Schema with ttl options', function (done) {
+    var schema = new Schema(
+      {
+        id: Number,
+        name: String
+      },
+      {
+        expires: {
+          ttl: 30*24*60*60, // 30 days in seconds
+          attribute: 'ttl'
+        }
+      }
+    );
+
+    should.exist(schema.expires);
+    should.exist(schema.expires.ttl);
+    schema.expires.ttl.should.be.equal(30*24*60*60);
+    should.exist(schema.expires.attribute);
+    schema.expires.attribute.should.be.equal('ttl');
+    done();
+  });
+
+
+  it('Schema with timestamps options', function (done) {
+    var schema1 = new Schema({
+      id: {
+        type: Number,
+        validate: function(v) { return v > 0; },
+        rangeKey: true
+      },
+      name: {
+        type: String,
+        required: true
+      },
+    },
+    {
+      throughput: {read: 10, write: 2},
+      timestamps: true
+    });
+
+    var schema2 = new Schema({
+      id: {
+        type: Number,
+        validate: function(v) { return v > 0; },
+        rangeKey: true
+      },
+      name: {
+        type: String,
+        required: true
+      },
+    },
+    {
+      throughput: {read: 10, write: 2},
+      timestamps: { createdAt: 'createDate', updatedAt: 'lastUpdate'}
+    });
+
+
+    schema1.attributes.id.type.name.should.eql('number');
+    should(schema1.attributes.id.isSet).not.be.ok;
+    should.not.exist(schema1.attributes.id.default);
+    var validator = schema1.attributes.id.validator;
+    should.exist(validator);
+    validator(-1).should.not.be.ok;
+    validator(1).should.be.ok;
+    should(schema1.attributes.id.required).not.be.ok;
+
+    schema1.attributes.name.type.name.should.eql('string');
+    schema1.attributes.name.isSet.should.not.be.ok;
+    should.not.exist(schema1.attributes.name.default);
+    should.not.exist(schema1.attributes.name.validator);
+    schema1.attributes.name.required.should.be.ok;
+
+    schema1.rangeKey.should.equal(schema1.attributes.id);
+
+    schema1.throughput.read.should.equal(10);
+    schema1.throughput.write.should.equal(2);
+    //
+    // Schema1 timestamps validation
+    //
+    should.exist(schema1.timestamps);
+    should.exist(schema1.timestamps.createdAt);
+    schema1.timestamps.createdAt.should.be.equal('createdAt');
+    should.exist(schema1.timestamps.updatedAt);
+    schema1.timestamps.updatedAt.should.be.equal('updatedAt');
+
+    schema1.attributes.createdAt.type.name.should.eql('date');
+    should.exist(schema1.attributes.createdAt.default);
+
+    schema1.attributes.updatedAt.type.name.should.eql('date');
+    should.exist(schema1.attributes.updatedAt.default);
+    //
+    // Schema2 timestamps validation
+    //
+    should.exist(schema2.timestamps);
+    should.exist(schema2.timestamps.createdAt);
+    schema2.timestamps.createdAt.should.be.equal('createDate');
+    should.exist(schema2.timestamps.updatedAt);
+    schema2.timestamps.updatedAt.should.be.equal('lastUpdate');
+
+    schema2.attributes.createDate.type.name.should.eql('date');
+    should.exist(schema2.attributes.createDate.default);
+
+    schema2.attributes.lastUpdate.type.name.should.eql('date');
+    should.exist(schema2.attributes.lastUpdate.default);
+
+    done();
+  });
+
+
   it('Schema with use Document Types', function (done) {
     var schema = new Schema({
       id: {
@@ -245,6 +373,29 @@ describe('Schema tests', function (){
     schema.attributes.anotherList.attributes[0].attributes.listMapName.default().should.be.ok;
 
     done();
+  });
+
+  it('Schema with use Native Booleans', function (done) {
+    var schema = new Schema({
+     name: String,
+     isAwesome: Boolean
+    }, {useNativeBooleans: true});
+
+    var Cat = dynamoose.model('Cat' + Date.now(), schema);
+    var fluffy = new Cat();
+
+    fluffy.name = 'Fluff Johnson';
+    fluffy.isAwesome = true;
+
+    schema.useNativeBooleans.should.be.ok;
+
+    Cat.$__.schema.attributes.isAwesome.type.dynamo.should.eql('BOOL');
+
+    Cat.$__.table.delete(function () {
+      delete dynamoose.models.Cat;
+      done();
+    });
+
   });
 
   it('Schema with secondary indexes', function (done) {
@@ -422,7 +573,7 @@ describe('Schema tests', function (){
       return name + '\'s kitten';
     });
 
-    var Cat = dynamoose.model('Cat',staticSchema);
+    var Cat = dynamoose.model('Cat' + Date.now(),staticSchema);
     var kitten = Cat.findKittenName('sue');
     kitten.should.eql('sue\'s kitten');
 
@@ -464,7 +615,7 @@ describe('Schema tests', function (){
       this._mergedname = v;
     });
 
-    var Cat = dynamoose.model('Cat', schema);
+    var Cat = dynamoose.model('Cat' + Date.now(), schema);
     var tim = new Cat();
 
     tim.name = 'tommy';
@@ -483,6 +634,169 @@ describe('Schema tests', function (){
     });
   });
 
+  it('Schema with custom parser', function (done) {
+
+    var schema = new Schema({
+      name: String,
+      owner: String
+    }, {
+      attributeFromDynamo: function(name, value, fallback) {
+        if (name === 'owner') {
+          return 'Cat Lover: ' + value.S;
+        }
+        return fallback(value);
+      }
+    });
+
+    var Cat = dynamoose.model('Cat' + Date.now(), schema);
+    var tim = new Cat();
+
+    tim.name = 'tommy';
+    tim.owner = 'bill';
+
+    tim.save(function() {
+      Cat.scan().exec(function(err, models) {
+        if (err) {
+          throw err;
+        }
+        var timSaved = models.pop();
+        timSaved.owner.should.eql('Cat Lover: bill');
+
+        Cat.$__.table.delete(function () {
+          delete dynamoose.models.Cat;
+          done();
+        });
+      });
+    });
+  });
+
+  it('Schema with custom formatter', function (done) {
+
+    var schema = new Schema({
+      name: String,
+      owner: String
+    }, {
+      attributeToDynamo: function(name, value, model, fallback) {
+        if (name === 'owner') {
+          return {S: 'Cat Lover: ' + value};
+        }
+        return fallback(value);
+      }
+    });
+
+    var Cat = dynamoose.model('Cat' + Date.now(), schema);
+    var tim = new Cat();
+
+    tim.name = 'tommy';
+    tim.owner = 'bill';
+
+    tim.save(function() {
+      Cat.scan().exec(function(err, models) {
+        if (err) {
+          throw err;
+        }
+        var timSaved = models.pop();
+        timSaved.owner.should.eql('Cat Lover: bill');
+
+        Cat.$__.table.delete(function () {
+          delete dynamoose.models.Cat;
+          done();
+        });
+      });
+    });
+  });
+
+  it('Attribute with custom parser', function (done) {
+
+    var schema = new Schema({
+      name: String,
+      owner: {
+        type: String,
+        fromDynamo: function(json) {
+          return 'Cat Lover: ' + json.S;
+        }
+      }
+    });
+
+    var Cat = dynamoose.model('Cat' + Date.now(), schema);
+    var tim = new Cat();
+
+    tim.name = 'tommy';
+    tim.owner = 'bill';
+
+    tim.save(function() {
+      Cat.scan().exec(function(err, models) {
+        if (err) {
+          throw err;
+        }
+        var timSaved = models.pop();
+        timSaved.owner.should.eql('Cat Lover: bill');
+
+        Cat.$__.table.delete(function () {
+          delete dynamoose.models.Cat;
+          done();
+        });
+      });
+    });
+  });
+
+  it('Schema with custom formatter', function (done) {
+
+    var schema = new Schema({
+      name: String,
+      owner: {
+        type: String,
+        toDynamo: function(value) {
+          return {S: 'Cat Lover: ' + value};
+        }
+      }
+    });
+
+    var Cat = dynamoose.model('Cat' + Date.now(), schema);
+    var tim = new Cat();
+
+    tim.name = 'tommy';
+    tim.owner = 'bill';
+
+    tim.save(function() {
+      Cat.scan().exec(function(err, models) {
+        if (err) {
+          throw err;
+        }
+        var timSaved = models.pop();
+        timSaved.owner.should.eql('Cat Lover: bill');
+
+        Cat.$__.table.delete(function () {
+          delete dynamoose.models.Cat;
+          done();
+        });
+      });
+    });
+  });
 
 
+  it('Handle unknow attributes in DynamoDB', function (done) {
+
+    var unknownSchema = new Schema({
+     id: Number
+     }, {
+      saveUnknown: true
+    });
+
+    var model = {};
+    unknownSchema.parseDynamo(model, {
+      id: { N: '2' },
+      name: { S: 'Fluffy' },
+      anObject: { S: '{"a":"attribute"}' },
+      numberString: { S: '1' },
+    });
+
+    model.should.eql({
+      id: 2,
+      name: 'Fluffy',
+      anObject: { a: 'attribute' },
+      numberString: 1,
+    });
+    done();
+  });
 });
