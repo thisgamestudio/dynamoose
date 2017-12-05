@@ -16,7 +16,7 @@ var should = require('should');
 
 
 describe('Scan', function (){
-  this.timeout(5000);
+  this.timeout(10000);
 
   before(function (done) {
 
@@ -52,8 +52,16 @@ describe('Scan', function (){
       },
       cartoon: {
         type: Boolean
+      },
+      details: {
+        timeWakeUp: {
+          type: String
+        },
+        timeSleep: {
+          type: String
+        }
       }
-    });
+    }, { useDocumentTypes: true });
 
 
     function addDogs (dogs) {
@@ -87,11 +95,11 @@ describe('Scan', function (){
       {ownerId:12, name: 'Hooch', breed: 'Dogue de Bordeaux', color: ['Brown']},
       {ownerId:13, name: 'Rin Tin Tin', breed: 'German Shepherd'},
       {ownerId:14, name: 'Benji', breed: 'unknown'},
-      {ownerId:15, name: 'Wishbone', breed: 'Jack Russell Terrier', color: ['White']},
+      {ownerId:15, name: 'Wishbone', breed: 'Jack Russell Terrier', color: ['White'], details: { timeWakeUp: '6am', timeSleep: '8pm' }},
       {ownerId:16, name: 'Marley', breed: 'Labrador Retriever', color: ['Yellow']},
       {ownerId:17, name: 'Beethoven', breed: 'St. Bernard'},
       {ownerId:18, name: 'Lassie', breed: 'Collie', color: ['tan', 'white']},
-      {ownerId:19, name: 'Snoopy', breed: 'Beagle', color: ['black', 'white'], cartoon: true}]);
+      {ownerId:19, name: 'Snoopy', breed: 'Beagle', color: ['black', 'white'], cartoon: true, details: { timeWakeUp: '8am', timeSleep: '8pm' }}]);
 
   });
 
@@ -253,6 +261,16 @@ describe('Scan', function (){
     var Dog = dynamoose.model('Dog');
 
     Dog.scan('cartoon').null().exec(function (err, dogs) {
+      should.not.exist(err);
+      dogs.length.should.eql(13);
+      done();
+    });
+  });
+
+  it('Scan with blank eq - same as null', function (done) {
+    var Dog = dynamoose.model('Dog');
+
+    Dog.scan('cartoon').eq('').exec(function (err, dogs) {
       should.not.exist(err);
       dogs.length.should.eql(13);
       done();
@@ -467,10 +485,11 @@ describe('Scan', function (){
     var Dog = dynamoose.model('Dog');
 
     (function() {
-      Dog.scan('name').not().beginsWith('B').exec(function () {
-        should.not.exist(true);
+      Dog.scan('name').not().beginsWith('B').exec(function (err) {
+        should.exist(err);
+        err.code.should.eql('Invalid scan state: beginsWith() cannot follow not()');
       });
-    }).should.throw('Invalid scan state: beginsWith() cannot follow not()');
+    });
     done();
   });
 
@@ -499,10 +518,11 @@ describe('Scan', function (){
     var Dog = dynamoose.model('Dog');
 
     (function() {
-      Dog.scan('name').not().in(['Beagle', 'Hound']).exec(function () {
-        should.not.exist(true);
+      Dog.scan('name').not().in(['Beagle', 'Hound']).exec(function (err) {
+        should.exist(err);
+        err.code.should.eql('Invalid scan state: in() cannot follow not()');
       });
-    }).should.throw('Invalid scan state: in() cannot follow not()');
+    });
     done();
   });
 
@@ -531,10 +551,11 @@ describe('Scan', function (){
     var Dog = dynamoose.model('Dog');
 
     (function() {
-      Dog.scan('ownerId').not().between(5, 8).exec(function () {
-        should.not.exist(true);
+      Dog.scan('ownerId').not().between(5, 8).exec(function (err) {
+        should.exist(err);
+        err.code.should.eql('Invalid scan state: between() cannot follow not()');
       });
-    }).should.throw('Invalid scan state: between() cannot follow not()');
+    });
     done();
   });
 
@@ -597,10 +618,11 @@ describe('Scan', function (){
     var Dog = dynamoose.model('Dog');
 
     (function() {
-      Dog.scan({and:[{'breed': {eq: 'unknown'}},{'breed':{eq:'Benji'}}]},function () {
-        should.not.exist(true);
+      Dog.scan({and:[{'breed': {eq: 'unknown'}},{'breed':{eq:'Benji'}}]},function (err) {
+        should.exist(err);
+        err.code.should.eql('Invalid scan state; %s can only be used once');
       });
-    }).should.throw('Invalid scan state; %s can only be used once');
+    });
     done();
   });
 
@@ -634,6 +656,121 @@ describe('Scan', function (){
     });
   });
 
+  it('Scan.consistent', function (done) {
+    var Dog = dynamoose.model('Dog');
+    Dog.scan('ownerId').eq(2).consistent().exec(function (err, dogs) {
+      should.not.exist(err);
+      dogs.length.should.eql(2);
+      done();
+    });
+  });
+
+  it('Scan.all', function (done) {
+    var Dog = dynamoose.model('Dog');
+
+    Dog.scan().all().limit(5).exec(function (err, dogs) {
+      should.not.exist(err);
+      dogs.length.should.eql(20);
+      done();
+    });
+  });
+
+  it('Scan.all(1,2)', function (done) {
+    var Dog = dynamoose.model('Dog');
+
+    Dog.scan().all(1,2).limit(5).exec(function (err, dogs) {
+      should.not.exist(err);
+      dogs.length.should.eql(10);
+      done();
+    });
+  });
+
+  it('Scan using raw AWS filter', function (done) {
+    var Dog = dynamoose.model('Dog');
+    var filter = {
+      FilterExpression: 'details.timeWakeUp = :wakeUp',
+      ExpressionAttributeValues: {
+        ':wakeUp': '8am'
+      }
+    };
+
+    Dog.scan(filter, { useRawAwsFilter: true }).exec()
+      .then(function(dogs) {
+        dogs.length.should.eql(1);
+        done();
+      })
+      .catch(function(err) {
+        should.not.exist(err);
+        console.error(err);
+        done();
+      });
+  });
+
+  it('Raw AWS filter should return model instances', function (done) {
+    var Dog = dynamoose.model('Dog');
+    var filter = {
+      FilterExpression: 'details.timeWakeUp = :wakeUp',
+      ExpressionAttributeValues: {
+        ':wakeUp': '8am'
+      }
+    };
+
+    Dog.scan(filter, { useRawAwsFilter: true }).exec()
+      .then(function(dogs) {
+        dogs[0].should.be.instanceof(Dog);
+        done();
+      })
+      .catch(function(err) {
+        should.not.exist(err);
+        console.error(err);
+        done();
+      });
+  });
+
+  it('Scan parallel', function (done) {
+    var Dog = dynamoose.model('Dog');
+
+    Dog.scan().parallel(2).exec(function (err, dogs) {
+      should.not.exist(err);
+      dogs.length.should.eql(20);
+      done();
+    });
+  });
+
+
+  it('Scan with startAt array - implied parallel', function (done) {
+    var Dog = dynamoose.model('Dog');
+
+    Dog.scan().parallel(2).limit(2).exec()
+    .then(function (dogs) {
+      dogs.length.should.eql(4);
+      dogs.lastKey.length.should.eql(2);
+      dogs.count.should.eql(4);
+      dogs.scannedCount.should.eql(4);
+      dogs.timesScanned.should.eql(2);
+      return Dog.scan().startAt(dogs.lastKey).exec();
+    })
+    .then(function (more) {
+      more.length.should.eql(16);
+      more.count.should.eql(16);
+      more.scannedCount.should.eql(16);
+      more.timesScanned.should.eql(2);
+      done();
+    })
+    .catch(done);
+  });
+
+  it('Scan parallel all', function (done) {
+    var Dog = dynamoose.model('Dog');
+
+    Dog.scan().parallel(2).limit(2).all().exec()
+    .then(function (dogs) {
+      dogs.length.should.eql(20);
+      should.not.exist(dogs.lastKey);
+      done();
+    })
+    .catch(done);
+  });
 
 
 });
